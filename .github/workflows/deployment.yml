@@ -33,7 +33,32 @@ jobs:
       issues: write  # release labels
       pull-requests: write  # open and update the release PR
     steps:
+      # release-please ignores draft releases (they have no tag). Until the draft
+      # for the manifest version is published it finds no release for that
+      # version and proposes 1.0.0 with the whole history as changelog, so do not
+      # run it in that window. Never delete a pending draft for the same reason.
+      - name: Check for an unpublished draft release
+        id: pending
+        # bash -eo pipefail: without pipefail a failed `gh api` in the pipeline
+        # below is hidden by jq, which exits 0 on empty input.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(gh api "repos/$GITHUB_REPOSITORY/contents/.release-please-manifest.json?ref=$GITHUB_SHA" \
+            --jq .content | base64 -d | jq -er '."."')"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Unexpected version in .release-please-manifest.json: '$version'"
+            exit 1
+          fi
+          drafts="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.draft and .tag_name == \"v$version\") | .id")"
+          if [[ -n "$drafts" ]]; then
+            echo "::warning::Draft release v$version is not published yet: release-please skipped"
+            echo "draft=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
+        if: steps.pending.outputs.draft != 'true'
 
   build:
     name: Build distribution 📦
